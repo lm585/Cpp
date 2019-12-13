@@ -86,6 +86,12 @@ void updateMethyList( string chr, string pos, map<string, int> & indexMap, doubl
 
 using namespace std;
 
+struct pileInfo
+{
+ int a, c, g, t;
+ int ins, del;
+};
+
 struct cgMethyl
 {
  string chr;
@@ -94,6 +100,7 @@ struct cgMethyl
  bool hasAvalue;
  double methyl;
  int numOfCorG, total;
+ pileInfo pI[2]; //C site, pI[0], A/C/G/T/ins/del read number; G site - pI[1] ......
 };
 
 struct pileup
@@ -115,25 +122,25 @@ struct param
  bool forward, reverse;
 };
 
+
 vector<cgMethyl> glob_cgMethyl_list;
 
-void updateMethyList( string key, map<string, int> & indexMap, double m, int numOfC, int cAndT)
+void updateMethyList( string key, map<string, int> & indexMap, double m, const pileInfo & piC, const pileInfo & piG)
 {
  if(indexMap.count(key) > 0)
  {
   int index = indexMap[key];
   glob_cgMethyl_list[index].hasAvalue = true;
-  glob_cgMethyl_list[index].numOfCorG = numOfC;
-  glob_cgMethyl_list[index].total = cAndT;
+  glob_cgMethyl_list[index].pI[0] = piC; //piC assignment, six integers
+  glob_cgMethyl_list[index].pI[1] = piG;
   return;
  }
 }
 
-bool line2pile(string line, pileup & pile, string & str);
+bool line2pile(string line, pileup & pile,  string & str);
 int parseInDelStr(string mapStr, int i, string & ins);  //+20TTTTTTTTTTTT....TG; -3AAC
-void pile2ACGTcount(const pileup & pile, int & a, int & c, int & g, int & t, int & cov);
-bool calcMethyl(const pileup & pile_C, const pileup & pile_G, const param & par, 
-     double & meth, int &, int &);
+void pile2ACGTcount(const pileup & pile, pileInfo & pI, int & cov);
+bool calcMethyl(const pileup & pile_C, const pileup & pile_G, const param & par, double & meth, pileInfo & pIc, pileInfo & pIg);
 
 int main(int argc, char * argv[])
 {
@@ -217,7 +224,7 @@ int main(int argc, char * argv[])
 
  bool b, t;
  double meth = -999999;
- int numOfC, cAndT;
+ pileInfo pIc, pIg;
  string chrPosStr;
  input.open(argv[3], ios::in);
  if(!input)
@@ -239,12 +246,12 @@ int main(int argc, char * argv[])
    {
     getline(input, line);
     line2pile(line, pileG, str2);
-    if(pileG.chr == pile.chr && pileG.pos - 1 == pile.pos)
+    if(pileG.chr == pile.chr && pileG.pos - 1 == pile.pos) //pileup file has both C & G line;
     {
-     t = calcMethyl(pile,pileG,par, meth, numOfC, cAndT);
+     t = calcMethyl(pile,pileG,par, meth, pIc, pIg);
      if(t) // sufficient coverage to calc methy level
      {
-      updateMethyList(chrPosStr, cgSiteMap, meth, numOfC, cAndT);
+      updateMethyList(chrPosStr, cgSiteMap, meth, pIc, pIg);
      }
     }
    } //a CpG site
@@ -259,14 +266,34 @@ int main(int argc, char * argv[])
   cerr << argv[2] << " cannot be written to.\n";
   return 1;
  }
- output <<   argv[4] << endl;
+ output <<   argv[4] << "\t" << argv[6] << endl;
+ output << "C-site A/C/G/T/ins/del\tG-site A/C/G/T/ins/del" << endl;
+ output << "A\tC\tG\tT\tIns\tDel\tA\tC\tG\tT\tIns\tDel\n";
  {
   for(int j = 0; j < glob_cgMethyl_list.size(); j++)
   {
    if(glob_cgMethyl_list[j].hasAvalue == true)
-     output << glob_cgMethyl_list[j].numOfCorG << "\t" << glob_cgMethyl_list[j].total << endl;
+   {
+    for(int i = 0; i < 2; i++)
+    {
+     output << glob_cgMethyl_list[j].pI[i].a << "\t";
+     output << glob_cgMethyl_list[j].pI[i].c << "\t";
+     output << glob_cgMethyl_list[j].pI[i].g << "\t";
+     output << glob_cgMethyl_list[j].pI[i].t << "\t";
+     output << glob_cgMethyl_list[j].pI[i].ins << "\t";
+     output << glob_cgMethyl_list[j].pI[i].del;
+     if(i == 0)
+       output << "\t";
+     else
+       output << "\n";
+    }
+   }
    else
-     output << "0\t0" << endl;
+   {
+    for(int i = 1; i <= 11; i++)
+       output << "0\t";
+    output << "0\n";
+   }
   }
  }
 
@@ -316,14 +343,14 @@ bool line2pile(string line, pileup & pile, string & strPos)
  return true;
 }
 
-bool calcMethyl(const pileup & pile_C, const pileup & pile_G, const param & par, double & meth, int & numOfC, int & cAndT )
+bool calcMethyl(const pileup & pile_C, const pileup & pile_G, const param & par, double & meth, pileInfo & pIc, pileInfo & pIg)
 {
  bool hasMethValue = false;
  int a,c,g,t,cov, a2,c2,g2,t2,cov2;
 
- pile2ACGTcount(pile_C, a,c,g,t,cov);
- pile2ACGTcount(pile_G, a2,c2,g2,t2,cov2);
- if(par.forward == true)
+ pile2ACGTcount(pile_C, pIc,cov);
+ pile2ACGTcount(pile_G, pIg,cov2);
+ /*if(par.forward == true)
  {
   numOfC = c;
   cAndT = c + t;
@@ -333,6 +360,7 @@ bool calcMethyl(const pileup & pile_C, const pileup & pile_G, const param & par,
   numOfC = g2;
   cAndT = g2 + a2;
  }
+ */
 /* cov = a+c+g+t;
  cov2 = a2+c2+g2+t2;
  if(cov >= par.coverage && cov2 >= par.coverage)
@@ -345,7 +373,7 @@ bool calcMethyl(const pileup & pile_C, const pileup & pile_G, const param & par,
  return hasMethValue; 
 }
 
-void pile2ACGTcount(const pileup & pile, int & a, int & c, int & g, int & t, int & cov)
+void pile2ACGTcount(const pileup & pile, pileInfo & pI, int & cov)
 {
  char letter, refBase;
  string mapStr = "", insStr = "", acg = "ACGT";
@@ -406,10 +434,12 @@ void pile2ACGTcount(const pileup & pile, int & a, int & c, int & g, int & t, int
   else; //other symbol
  }
  baseCount[refBase] = numMatches;
- a = baseCount['A'];
- c = baseCount['C'];
- g = baseCount['G'];
- t = baseCount['T'];
+ pI.a = baseCount['A'];
+ pI.c = baseCount['C'];
+ pI.g = baseCount['G'];
+ pI.t = baseCount['T'];
+ pI.ins = numIn;
+ pI.del = numDel;
 }
 
 int parseInDelStr(string mapStr, int i, string & ins)  //+20TTTTTTTTTTTT....TG; -3AAC
